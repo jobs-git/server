@@ -2830,7 +2830,6 @@ XA_prepare_log_event(const char* buf,
   DBUG_ASSERT(m_xid.gtrid_length + m_xid.bqual_length <= XIDDATASIZE);
 
   memcpy(m_xid.data, buf, m_xid.gtrid_length + m_xid.bqual_length);
-
   xid= NULL;
 }
 
