@@ -6631,8 +6631,9 @@ btr_blob_free(
 	mtr_t*		mtr)	/*!< in: mini-transaction to commit */
 {
 	buf_pool_t*	buf_pool = buf_pool_from_block(block);
-	ulint		space = block->page.id.space();
-	ulint		page_no	= block->page.id.page_no();
+	page_id_t	page_id(block->page.id.space(),
+				block->page.id.page_no());
+	buf_page_t*	bpage;
 
 	ut_ad(mtr_is_block_fix(mtr, block, MTR_MEMO_PAGE_X_FIX, index->table));
 
@@ -6640,20 +6641,15 @@ btr_blob_free(
 
 	buf_pool_mutex_enter(buf_pool);
 
-	/* Only free the block if it is still allocated to
-	the same file page. */
+	bpage = buf_page_hash_get(buf_pool, page_id);
 
-	if (buf_block_get_state(block)
-	    == BUF_BLOCK_FILE_PAGE
-	    && block->page.id.space() == space
-	    && block->page.id.page_no() == page_no) {
-
-		if (!buf_LRU_free_page(&block->page, all)
-		    && all && block->page.zip.data) {
+	if (bpage) {
+		if (!buf_LRU_free_page(bpage, all)
+		    && all && bpage->zip.data) {
 			/* Attempt to deallocate the uncompressed page
 			if the whole block cannot be deallocted. */
 
-			buf_LRU_free_page(&block->page, false);
+			buf_LRU_free_page(bpage, false);
 		}
 	}
 
