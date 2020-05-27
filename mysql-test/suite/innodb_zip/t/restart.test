@@ -343,12 +343,21 @@ SHOW CREATE TABLE t77_restart;
 --list_files $MYSQL_TMP_DIR/alt_dir/test
 
 --echo #
+--echo # MDEV-22650 Dirty compressed page checksum validation fails
+--echo #
+CREATE TABLE t_dirty_compress(f1 INT)ENGINE=InnoDB;
+SET GLOBAL innodb_buffer_pool_evict='uncompressed';
+SET GLOBAL innodb_checksum_algorithm=strict_none;
+
+--echo #
 --echo # Restart the server
 --echo #
 --source include/restart_mysqld.inc
 SHOW VARIABLES LIKE 'innodb_file_per_table';
 
 --source suite/innodb/include/show_i_s_tablespaces.inc
+
+DROP TABLE t_dirty_compress;
 
 INSERT INTO t55_restart (SELECT 0, c2, c3, c4, c5 FROM t55_restart);
 SELECT count(*) FROM t55_restart;

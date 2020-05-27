@@ -713,6 +713,12 @@ t77_restart#p#p0#sp#s1.ibd
 t77_restart#p#p1#sp#s2.ibd
 t77_restart#p#p1#sp#s3.ibd
 #
+# MDEV-22650 Dirty compressed page checksum validation fails
+#
+CREATE TABLE t_dirty_compress(f1 INT)ENGINE=InnoDB;
+SET GLOBAL innodb_buffer_pool_evict='uncompressed';
+SET GLOBAL innodb_checksum_algorithm=strict_none;
+#
 # Restart the server
 #
 SHOW VARIABLES LIKE 'innodb_file_per_table';
@@ -729,6 +735,8 @@ test/t55_restart	Single	DEFAULT	DEFAULT	Dynamic	MYSQL_TMP_DIR/alt_dir/test/t55_r
 test/t66_restart#p#p2	Single	DEFAULT	DEFAULT	Compressed	MYSQL_TMP_DIR/alt_dir/test/t66_restart#p#p2.ibd
 test/t77_restart#p#p1#sp#s2	Single	DEFAULT	DEFAULT	Dynamic	MYSQL_TMP_DIR/alt_dir/test/t77_restart#p#p1#sp#s2.ibd
 test/t77_restart#p#p1#sp#s3	Single	DEFAULT	DEFAULT	Dynamic	MYSQL_TMP_DIR/alt_dir/test/t77_restart#p#p1#sp#s3.ibd
+test/t_dirty_compress	Single	DEFAULT	DEFAULT	Dynamic	MYSQLD_DATADIR/test/t_dirty_compress.ibd
+DROP TABLE t_dirty_compress;
 INSERT INTO t55_restart (SELECT 0, c2, c3, c4, c5 FROM t55_restart);
 SELECT count(*) FROM t55_restart;
 count(*)
