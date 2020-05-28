@@ -579,32 +579,41 @@ fail:
 /** Close the file handle. */
 void fil_node_t::close()
 {
-	bool	ret;
+  prepare_to_close_or_leak_handle();
 
-	ut_ad(mutex_own(&fil_system.mutex));
-	ut_a(is_open());
-	ut_a(n_pending == 0);
-	ut_a(n_pending_flushes == 0);
-	ut_a(!being_extended);
-	ut_a(!needs_flush
-	     || space->purpose == FIL_TYPE_TEMPORARY
-	     || srv_fast_shutdown == 2
-	     || !srv_was_started);
+  /* printf("Closing file %s\n", name); */
+  int ret= os_file_close(handle);
+  ut_a(ret);
+  handle= OS_FILE_CLOSED;
+}
 
-	ret = os_file_close(handle);
-	ut_a(ret);
+pfs_os_file_t fil_node_t::leak_handle()
+{
+  prepare_to_close_or_leak_handle();
 
-	/* printf("Closing file %s\n", name); */
+  pfs_os_file_t result= handle;
+  handle= OS_FILE_CLOSED;
+  return result;
+}
 
-	handle = OS_FILE_CLOSED;
-	ut_ad(!is_open());
-	ut_a(fil_system.n_open > 0);
-	fil_system.n_open--;
+void fil_node_t::prepare_to_close_or_leak_handle()
+{
+  ut_ad(mutex_own(&fil_system.mutex));
+  ut_a(is_open());
+  ut_a(n_pending == 0);
+  ut_a(n_pending_flushes == 0);
+  ut_a(!being_extended);
+  ut_a(!needs_flush || space->purpose == FIL_TYPE_TEMPORARY ||
+       srv_fast_shutdown == 2 || !srv_was_started);
 
-	if (fil_space_belongs_in_lru(space)) {
-		ut_a(UT_LIST_GET_LEN(fil_system.LRU) > 0);
-		UT_LIST_REMOVE(fil_system.LRU, this);
-	}
+  ut_a(fil_system.n_open > 0);
+  fil_system.n_open--;
+
+  if (fil_space_belongs_in_lru(space))
+  {
+    ut_a(UT_LIST_GET_LEN(fil_system.LRU) > 0);
+    UT_LIST_REMOVE(fil_system.LRU, this);
+  }
 }
 
 /** Tries to close a file in the LRU list. The caller must hold the fil_sys
@@ -989,17 +998,22 @@ fil_space_extend(
 
 /** Prepare to free a file node object from a tablespace memory cache.
 @param[in,out]	node	file node
-@param[in]	space	tablespace */
+@param[in]	space	tablespace
+@param[in]	leak_handle	close or leak handle
+@retval	leaked handle */
 static
-void
+pfs_os_file_t
 fil_node_close_to_free(
 	fil_node_t*	node,
-	fil_space_t*	space)
+	fil_space_t*	space,
+	bool		leak_handle = false)
 {
 	ut_ad(mutex_own(&fil_system.mutex));
 	ut_a(node->magic_n == FIL_NODE_MAGIC_N);
 	ut_a(node->n_pending == 0);
 	ut_a(!node->being_extended);
+
+	pfs_os_file_t result = OS_FILE_CLOSED;
 
 	if (node->is_open()) {
 		/* We fool the assertion in fil_node_t::close() to think
@@ -1019,18 +1033,24 @@ fil_node_close_to_free(
 			space->is_in_unflushed_spaces = false;
 		}
 
-		node->close();
+		if (leak_handle) {
+			result = node->leak_handle();
+		} else {
+			node->close();
+		}
 	}
+
+	return result;
 }
 
 /** Detach a space object from the tablespace memory cache.
 Closes the files in the chain but does not delete them.
 There must not be any pending i/o's or flushes on the files.
-@param[in,out]	space		tablespace */
-static
-void
-fil_space_detach(
-	fil_space_t*	space)
+@param[in,out]	space		tablespace
+@param[in]	leak_handle	leak or close handle
+@retval	leaked handles */
+static std::vector<pfs_os_file_t> fil_space_detach(fil_space_t* space,
+						   bool leak_handle = false)
 {
 	ut_ad(mutex_own(&fil_system.mutex));
 
@@ -1053,11 +1073,17 @@ fil_space_detach(
 	ut_a(space->magic_n == FIL_SPACE_MAGIC_N);
 	ut_a(space->n_pending_flushes == 0);
 
+	std::vector<pfs_os_file_t> handles;
+	handles.reserve(UT_LIST_GET_LEN(space->chain));
+
 	for (fil_node_t* fil_node = UT_LIST_GET_FIRST(space->chain);
 	     fil_node != NULL;
 	     fil_node = UT_LIST_GET_NEXT(chain, fil_node)) {
 
-		fil_node_close_to_free(fil_node, space);
+		auto handle = fil_node_close_to_free(fil_node, space, leak_handle);
+		if (handle != OS_FILE_CLOSED) {
+			handles.push_back(handle);
+		}
 	}
 
 	if (space == fil_system.sys_space) {
@@ -1065,6 +1091,8 @@ fil_space_detach(
 	} else if (space == fil_system.temp_space) {
 		fil_system.temp_space = NULL;
 	}
+
+	return handles;
 }
 
 /** Free a tablespace object on which fil_space_detach() was invoked.
@@ -2261,13 +2289,16 @@ bool fil_table_accessible(const dict_table_t* table)
 /** Delete a tablespace and associated .ibd file.
 @param[in]	id		tablespace identifier
 @param[in]	if_exists	whether to ignore missing tablespace
+@param[in,out]	leaked_handles	return leaked handles if not nullptr
 @return	DB_SUCCESS or error */
-dberr_t fil_delete_tablespace(ulint id, bool if_exists)
+dberr_t fil_delete_tablespace(ulint id, bool if_exists,
+			      std::vector<pfs_os_file_t>* leaked_handles)
 {
 	char*		path = 0;
 	fil_space_t*	space = 0;
 
 	ut_a(!is_system_tablespace(id));
+	ut_ad(!leaked_handles || leaked_handles->empty());
 
 	dberr_t err = fil_check_pending_operations(
 		id, FIL_OPERATION_DELETE, &space, &path);
@@ -2347,7 +2378,10 @@ dberr_t fil_delete_tablespace(ulint id, bool if_exists)
 		fil_node_t* node = UT_LIST_GET_FIRST(space->chain);
 		ut_a(node->n_pending == 0);
 
-		fil_space_detach(space);
+		auto handles = fil_space_detach(space, leaked_handles);
+		if (leaked_handles) {
+			*leaked_handles = std::move(handles);
+		}
 		mutex_exit(&fil_system.mutex);
 
 		log_mutex_enter();

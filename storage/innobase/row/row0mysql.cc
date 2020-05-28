@@ -3357,6 +3357,8 @@ row_drop_table_for_mysql(
 		DBUG_RETURN(DB_TABLE_NOT_FOUND);
 	}
 
+	std::vector<pfs_os_file_t> leaked_handles;
+
 	const bool is_temp_name = strstr(table->name.m_name,
 					 "/" TEMP_FILE_PREFIX);
 
@@ -3740,7 +3742,8 @@ do_drop:
 		ut_ad(!filepath);
 
 		if (space->id != TRX_SYS_SPACE) {
-			err = fil_delete_tablespace(space->id);
+			err = fil_delete_tablespace(space->id, false,
+						    &leaked_handles);
 		}
 		break;
 
@@ -3818,6 +3821,11 @@ funct_exit_all_freed:
 		}
 
 		row_mysql_unlock_data_dictionary(trx);
+	}
+
+	for (const auto& handle : leaked_handles) {
+		ut_ad(handle != OS_FILE_CLOSED);
+		os_file_close(handle);
 	}
 
 	trx->op_info = "";
