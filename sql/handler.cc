@@ -1258,7 +1258,14 @@ void trans_register_ha(THD *thd, bool all, handlerton *ht_arg, ulonglong trxid)
   if (ha_info->is_started())
     DBUG_VOID_RETURN; /* already registered, return */
 
-  ha_info->register_ha(trans, ht_arg);
+  /*
+    when true, typically at a second engine gets involved into user xa
+    transaction the handlerton is inserted into the list past its head.
+  */
+  bool link_past_head=
+    unlikely(thd->transaction.xid_state.is_explicit_XA() &&
+             trans->ha_list && trans->ha_list->ht() == binlog_hton);
+  ha_info->register_ha(trans, ht_arg, link_past_head);
 
   trans->no_2pc|=(ht_arg->prepare==0);
 
