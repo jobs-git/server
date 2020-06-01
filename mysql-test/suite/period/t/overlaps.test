@@ -67,6 +67,25 @@ update t set e= '2003-05-01' where s = '2003-01-01';
 
 select * from t where year(s) = 2003;
 
+--echo # update ... for portion test
+insert t values (2, '2003-04-15', '2003-05-01');
+
+update t for portion of p from '2003-01-01' to '2003-01-15'
+         set id= 2;
+--sorted_result
+select * from t;
+
+update t for portion of p from '2003-01-15' to '2003-02-01'
+         set id= 2;
+--sorted_result
+select * from t;
+
+--error ER_DUP_ENTRY
+update t for portion of p from '2003-04-01' to '2003-06-01'
+         set id= 2;
+--sorted_result
+select * from t;
+
 --error ER_PERIOD_NOT_FOUND
 create or replace table t(id int, s date, e date,
                           period for p(s,e),

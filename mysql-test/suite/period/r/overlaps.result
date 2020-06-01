@@ -62,6 +62,36 @@ id	s	e
 1	2003-01-01	2003-02-01
 1	2003-03-01	2003-05-01
 1	2003-05-01	2003-07-01
+# update ... for portion test
+insert t values (2, '2003-04-15', '2003-05-01');
+update t for portion of p from '2003-01-01' to '2003-01-15'
+         set id= 2;
+select * from t;
+id	s	e
+1	2003-01-15	2003-02-01
+1	2003-03-01	2003-05-01
+1	2003-05-01	2003-07-01
+2	2003-01-01	2003-01-15
+2	2003-04-15	2003-05-01
+update t for portion of p from '2003-01-15' to '2003-02-01'
+         set id= 2;
+select * from t;
+id	s	e
+1	2003-03-01	2003-05-01
+1	2003-05-01	2003-07-01
+2	2003-01-01	2003-01-15
+2	2003-01-15	2003-02-01
+2	2003-04-15	2003-05-01
+update t for portion of p from '2003-04-01' to '2003-06-01'
+         set id= 2;
+ERROR 23000: Duplicate entry '2-2003-05-01-2003-04-01' for key 'PRIMARY'
+select * from t;
+id	s	e
+1	2003-03-01	2003-05-01
+1	2003-05-01	2003-07-01
+2	2003-01-01	2003-01-15
+2	2003-01-15	2003-02-01
+2	2003-04-15	2003-05-01
 create or replace table t(id int, s date, e date,
 period for p(s,e),
 primary key(id, q without overlaps));
