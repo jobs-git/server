@@ -7036,6 +7036,9 @@ check_table_access(THD *thd, privilege_t requirements, TABLE_LIST *tables,
     if (table_ref->is_anonymous_derived_table())
       continue;
 
+    if (table_ref->table_function)
+      continue;
+
     if (table_ref->sequence)
     {
       /* We want to have either SELECT or INSERT rights to sequences depending
@@ -8123,6 +8126,7 @@ TABLE_LIST *st_select_lex::add_table_to_list(THD *thd,
   }
 
   if (unlikely(table->is_derived_table() == FALSE && table->db.str &&
+               !(table_options & TL_OPTION_TABLE_FUNCTION) &&
                check_db_name((LEX_STRING*) &table->db)))
   {
     my_error(ER_WRONG_DB_NAME, MYF(0), table->db.str);

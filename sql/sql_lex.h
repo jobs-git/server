@@ -34,6 +34,7 @@
 #include "sql_tvc.h"
 #include "item.h"
 #include "sql_limit.h"                // Select_limit_counters
+#include "table_function.h"           // Json_table_column
 
 /* Used for flags of nesting constructs */
 #define SELECT_NESTING_MAP_SIZE 64
@@ -453,6 +454,7 @@ enum enum_drop_mode
 #define TL_OPTION_IGNORE_LEAVES 4
 #define TL_OPTION_ALIAS         8
 #define TL_OPTION_SEQUENCE      16
+#define TL_OPTION_TABLE_FUNCTION        32
 
 typedef List<Item> List_item;
 typedef Mem_root_array<ORDER*, true> Group_list_ptrs;
@@ -3290,6 +3292,8 @@ public:
   SQL_I_List<ORDER> proc_list;
   SQL_I_List<TABLE_LIST> auxiliary_table_list, save_list;
   Column_definition *last_field;
+  Json_table_column *cur_json_table_column;
+  Table_function_json_table *json_table;
   Item_sum *in_sum_func;
   udf_func udf;
   HA_CHECK_OPT   check_opt;                        // check/repair options

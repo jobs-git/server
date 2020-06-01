@@ -1407,6 +1407,14 @@ void get_delayed_table_estimates(TABLE *table,
                                  double *startup_cost)
 {
   Item_in_subselect *item= table->pos_in_table_list->jtbm_subselect;
+  Table_function_json_table *table_function=
+                               table->pos_in_table_list->table_function;
+
+  if (table_function)
+  {
+    table_function->get_estimates(out_rows, scan_time, startup_cost);
+    return;
+  }
 
   DBUG_ASSERT(item->engine->engine_type() ==
               subselect_engine::HASH_SJ_ENGINE);
