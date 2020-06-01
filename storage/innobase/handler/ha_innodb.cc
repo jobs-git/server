@@ -13327,8 +13327,9 @@ ha_innobase::discard_or_import_tablespace(
    @return 0 if it doesn't exists
 */
 
-static bool frm_file_exists(char *buff, const char *path)
+static bool frm_file_exists(const char *path)
 {
+  char buff[FN_REFLEN+5];
   strxmov(buff, path, reg_ext, NullS);
   return !access(buff, F_OK);
 }
@@ -13435,7 +13436,7 @@ inline int ha_innobase::delete_table(const char* name, enum_sql_command sqlcom)
 	}
 
 	if (err == DB_TABLE_NOT_FOUND &&
-            frm_file_exists(norm_name, name))
+            frm_file_exists(name))
         {
 		/* Test to drop all tables which matches db/tablename + '#'.
 		Only partitions can have '#' as non-first character in

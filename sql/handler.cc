@@ -2726,7 +2726,7 @@ const char *get_canonical_filename(handler *file, const char *path,
 
 int ha_delete_table(THD *thd, handlerton *table_type, const char *path,
                     const LEX_CSTRING *db, const LEX_CSTRING *alias,
-                    bool generate_warning)
+                    bool generate_warning, bool from_force_drop)
 {
   handler *file;
   char tmp_path[FN_REFLEN];
@@ -2755,6 +2755,15 @@ int ha_delete_table(THD *thd, handlerton *table_type, const char *path,
     bool intercept= non_existing_table_error(error);
     DBUG_ASSERT(error != -1);
 
+    if (error == HA_ERR_UNSUPPORTED || error == HA_ERR_WRONG_COMMAND)
+    {
+      /*
+        This is an engine like federatedX that doesn't support drop table
+        The table is automatically deleted, so it's ok to assume it's dropped
+      */
+      delete file;
+      DBUG_RETURN(from_force_drop ? -1 : 0);
+    }
     if ((!intercept || generate_warning) && ! thd->is_error())
     {
       /* Fill up strucutures that print_error may need */
@@ -4989,7 +4998,7 @@ static my_bool delete_table_force(THD *thd, plugin_ref plugin, void *arg)
   {
     int error;
     error= ha_delete_table(thd, hton, param->path, param->db,
-                           param->alias, param->generate_warning);
+                           param->alias, param->generate_warning, 1);
     if (error > 0 && !non_existing_table_error(error))
       param->error= error;
     if (error == 0)

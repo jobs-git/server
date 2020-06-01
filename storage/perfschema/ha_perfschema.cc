@@ -463,7 +463,7 @@ THR_LOCK_DATA **ha_perfschema::store_lock(THD *thd,
 int ha_perfschema::delete_table(const char *name)
 {
   DBUG_ENTER("ha_perfschema::delete_table");
-  DBUG_RETURN(0);
+  DBUG_RETURN(HA_ERR_WRONG_COMMAND);
 }
 
 int ha_perfschema::rename_table(const char * from, const char * to)

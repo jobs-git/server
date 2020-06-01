@@ -5143,7 +5143,7 @@ int ha_create_table(THD *thd, const char *path,
                     HA_CREATE_INFO *create_info, LEX_CUSTRING *frm);
 int ha_delete_table(THD *thd, handlerton *db_type, const char *path,
                     const LEX_CSTRING *db, const LEX_CSTRING *alias,
-                    bool generate_warning);
+                    bool generate_warning, bool from_force_drop);
 int ha_delete_table_force(THD *thd, const char *path, const LEX_CSTRING *db,
                           const LEX_CSTRING *alias, bool generate_warning);
 

@@ -2470,7 +2470,7 @@ int mysql_rm_table_no_locks(THD *thd, TABLE_LIST *tables, bool if_exists,
 
       thd->replication_flags= 0;
       error= ha_delete_table(thd, table_type, path, &db,
-                             &table->table_name, !dont_log_query);
+                             &table->table_name, !dont_log_query, 0);
 
       if (error < 0)                            // Table didn't exists
         error= 0;
@@ -2552,7 +2552,7 @@ int mysql_rm_table_no_locks(THD *thd, TABLE_LIST *tables, bool if_exists,
       the table).
     */
     if (non_existing_table_error(error) && !drop_temporary &&
-        !trigger_drop_executed)
+        table_type != view_pseudo_hton && !trigger_drop_executed)
     {
       char *end;
       int ferror= 0;
@@ -2869,7 +2869,7 @@ bool quick_rm_table(THD *thd, handlerton *base, const LEX_CSTRING *db,
     delete file;
   }
   if (!(flags & (FRM_ONLY|NO_HA_TABLE)))
-    if (ha_delete_table(thd, base, path, db, table_name, 0) > 0)
+    if (ha_delete_table(thd, base, path, db, table_name, 0, 0) > 0)
     error= 1;
 
   if (likely(error == 0))
