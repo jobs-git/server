@@ -5142,7 +5142,11 @@ int ha_create_table(THD *thd, const char *path,
                     const char *db, const char *table_name,
                     HA_CREATE_INFO *create_info, LEX_CUSTRING *frm);
 int ha_delete_table(THD *thd, handlerton *db_type, const char *path,
-                    const LEX_CSTRING *db, const LEX_CSTRING *alias, bool generate_warning);
+                    const LEX_CSTRING *db, const LEX_CSTRING *alias,
+                    bool generate_warning);
+int ha_delete_table_force(THD *thd, const char *path, const LEX_CSTRING *db,
+                          const LEX_CSTRING *alias, bool generate_warning);
+
 void ha_prepare_for_backup();
 void ha_end_backup();
 void ha_pre_shutdown();
@@ -5331,4 +5335,5 @@ void print_keydup_error(TABLE *table, KEY *key, myf errflag);
 int del_global_index_stat(THD *thd, TABLE* table, KEY* key_info);
 int del_global_table_stat(THD *thd, const  LEX_CSTRING *db, const LEX_CSTRING *table);
 uint ha_count_rw_all(THD *thd, Ha_trx_info **ptr_ha_info);
+bool non_existing_table_error(int error);
 #endif /* HANDLER_INCLUDED */

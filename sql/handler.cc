@@ -148,6 +148,44 @@ TYPELIB tx_isolation_typelib= {array_elements(tx_isolation_names)-1,"",
 static TYPELIB known_extensions= {0,"known_exts", NULL, NULL};
 uint known_extensions_id= 0;
 
+
+class Table_exists_error_handler : public Internal_error_handler
+{
+public:
+  Table_exists_error_handler()
+    : m_handled_errors(0), m_unhandled_errors(0)
+  {}
+
+  bool handle_condition(THD *thd,
+                        uint sql_errno,
+                        const char* sqlstate,
+                        Sql_condition::enum_warning_level *level,
+                        const char* msg,
+                        Sql_condition ** cond_hdl)
+  {
+    *cond_hdl= NULL;
+    if (non_existing_table_error(sql_errno))
+    {
+      m_handled_errors++;
+      return TRUE;
+    }
+
+    if (*level == Sql_condition::WARN_LEVEL_ERROR)
+      m_unhandled_errors++;
+    return FALSE;
+  }
+
+  bool safely_trapped_errors()
+  {
+    return ((m_handled_errors > 0) && (m_unhandled_errors == 0));
+  }
+
+private:
+  int m_handled_errors;
+  int m_unhandled_errors;
+};
+
+
 static int commit_one_phase_2(THD *thd, bool all, THD_TRANS *trans,
                               bool is_real_trans);
 
@@ -2674,26 +2712,34 @@ const char *get_canonical_filename(handler *file, const char *path,
 }
 
 
-/** delete a table in the engine
+/**
+   Delete a table in the engine
+
+   @return 0   Table was deleted
+   @return -1  Table didn't exists, no error given
+   @return #   Error from table handler
 
   @note
   ENOENT and HA_ERR_NO_SUCH_TABLE are not considered errors.
-  The .frm file will be deleted only if we return 0.
+  The .frm file should be deleted by the caller only if we return <= 0.
 */
+
 int ha_delete_table(THD *thd, handlerton *table_type, const char *path,
-                    const LEX_CSTRING *db, const LEX_CSTRING *alias, bool generate_warning)
+                    const LEX_CSTRING *db, const LEX_CSTRING *alias,
+                    bool generate_warning)
 {
   handler *file;
   char tmp_path[FN_REFLEN];
   int error;
   TABLE dummy_table;
   TABLE_SHARE dummy_share;
+  bool is_error= thd->is_error();
   DBUG_ENTER("ha_delete_table");
 
   /* table_type is NULL in ALTER TABLE when renaming only .frm files */
   if (table_type == NULL || table_type == view_pseudo_hton ||
       ! (file=get_new_handler((TABLE_SHARE*)0, thd->mem_root, table_type)))
-    DBUG_RETURN(0);
+    DBUG_RETURN(-1);
 
   bzero((char*) &dummy_table, sizeof(dummy_table));
   bzero((char*) &dummy_share, sizeof(dummy_share));
@@ -2703,11 +2749,11 @@ int ha_delete_table(THD *thd, handlerton *table_type, const char *path,
   if (unlikely((error= file->ha_delete_table(path))))
   {
     /*
-      it's not an error if the table doesn't exist in the engine.
+      It's not an error if the table doesn't exist in the engine.
       warn the user, but still report DROP being a success
     */
-    bool intercept= (error == ENOENT || error == HA_ERR_NO_SUCH_TABLE ||
-                     error == HA_ERR_UNSUPPORTED);
+    bool intercept= non_existing_table_error(error);
+    DBUG_ASSERT(error != -1);
 
     if ((!intercept || generate_warning) && ! thd->is_error())
     {
@@ -2723,8 +2769,10 @@ int ha_delete_table(THD *thd, handlerton *table_type, const char *path,
     }
     if (intercept)
     {
-      thd->clear_error();
-      error= 0;
+      /* Clear error if we got it in this function */
+      if (!is_error)
+        thd->clear_error();
+      error= -1;
     }
   }
   delete file;
@@ -4365,45 +4413,53 @@ uint handler::get_dup_key(int error)
 
   @note
     We assume that the handler may return more extensions than
-    was actually used for the file.
+    was actually used for the file. We also assume that the first
+    extension is the most important one. If this exist and we can't delete
+    that one we will abort the delete.
+    If the first one doesn't exists, we have to try to delete all other
+    extension as there is chance that the server had crashed between
+    the delete of the first file and the next
 
   @retval
     0   If we successfully deleted at least one file from base_ext and
-    didn't get any other errors than ENOENT
+        didn't get any other errors than ENOENT
+
   @retval
     !0  Error
 */
+
 int handler::delete_table(const char *name)
 {
-  int saved_error= 0;
-  int error= 0;
-  int enoent_or_zero;
+  int saved_error= ENOENT;
+  int abort_if_first_file_error= 1;
+  bool some_file_deleted= 0;
 
+  // For discovery tables, it's ok if first file doesn't exists
   if (ht->discover_table)
-    enoent_or_zero= 0; // the table may not exist in the engine, it's ok
-  else
-    enoent_or_zero= ENOENT;  // the first file of bas_ext() *must* exist
+    abort_if_first_file_error= 0;
 
-  for (const char **ext=bas_ext(); *ext ; ext++)
+  for (const char **ext= bas_ext(); *ext ; ext++)
   {
-    if (mysql_file_delete_with_symlink(key_file_misc, name, *ext, 0))
+    int error;
+    if ((error= mysql_file_delete_with_symlink(key_file_misc, name, *ext,
+                                              MYF(0))))
     {
       if (my_errno != ENOENT)
       {
+        saved_error= my_errno;
         /*
           If error on the first existing file, return the error.
           Otherwise delete as much as possible.
         */
-        if (enoent_or_zero)
-          return my_errno;
-	saved_error= my_errno;
+        if (abort_if_first_file_error)
+          return saved_error;
       }
     }
     else
-      enoent_or_zero= 0;                        // No error for ENOENT
-    error= enoent_or_zero;
+      some_file_deleted= 1;
+    abort_if_first_file_error= 0;
   }
-  return saved_error ? saved_error : error;
+  return some_file_deleted && saved_error == ENOENT ? 0 : saved_error;
 }
 
 
@@ -4439,6 +4495,21 @@ void handler::drop_table(const char *name)
 
 
 /**
+   Return true if the error from drop table means that the
+   table didn't exists
+*/
+
+bool non_existing_table_error(int error)
+{
+  return (error == ENOENT || error == HA_ERR_NO_SUCH_TABLE ||
+          error == HA_ERR_UNSUPPORTED ||
+          error == ER_NO_SUCH_TABLE ||
+          error == ER_NO_SUCH_TABLE_IN_ENGINE ||
+          error == ER_WRONG_OBJECT);
+}
+
+
+/**
   Performs checks upon the table.
 
   @param thd                thread doing CHECK TABLE operation
@@ -4453,6 +4524,7 @@ void handler::drop_table(const char *name)
   @retval
     HA_ADMIN_NOT_IMPLEMENTED
 */
+
 int handler::ha_check(THD *thd, HA_CHECK_OPT *check_opt)
 {
   int error;
@@ -4882,6 +4954,84 @@ handler::ha_drop_table(const char *name)
 
   mark_trx_read_write();
   drop_table(name);
+}
+
+
+/**
+   Structure used during force drop table.
+*/
+
+struct st_force_drop_table_params
+{
+  const char *path;
+  const LEX_CSTRING *db;
+  const LEX_CSTRING *alias;
+  bool generate_warning;
+  int error;
+};
+
+
+/**
+   Try to delete table from a given plugin
+   Table types with discovery is ignored as these .frm files would have
+   been created during discovery and thus doesn't need to be found
+   for drop table force
+*/
+
+static my_bool delete_table_force(THD *thd, plugin_ref plugin, void *arg)
+{
+  handlerton *hton = plugin_hton(plugin);
+  st_force_drop_table_params *param = (st_force_drop_table_params *)arg;
+
+  /* We have to ignore HEAP tables as these may not have been created yet */
+  if (!hton->discover_table && hton->db_type != DB_TYPE_HEAP &&
+      hton->db_type != DB_TYPE_SEQUENCE)
+  {
+    int error;
+    error= ha_delete_table(thd, hton, param->path, param->db,
+                           param->alias, param->generate_warning);
+    if (error > 0 && !non_existing_table_error(error))
+      param->error= error;
+    if (error == 0)
+    {
+      param->error= 0;
+      return TRUE;                                // Table was deleted
+    }
+  }
+  return FALSE;
+}
+
+/**
+   @brief
+   Traverse all plugins to delete table when .frm file is missing.
+
+   @return -1  Table was not found in any engine
+   @return 0  Table was found in some engine and delete succeded
+   @return #  Error from first engine that had a table but didn't succeed to
+              delete the table
+   @return HA_ERR_ROW_IS_REFERENCED if foreign key reference is encountered,
+
+*/
+
+int ha_delete_table_force(THD *thd, const char *path, const LEX_CSTRING *db,
+                          const LEX_CSTRING *alias, bool generate_warning)
+{
+  st_force_drop_table_params param;
+  Table_exists_error_handler no_such_table_handler;
+  DBUG_ENTER("ha_delete_table_force");
+
+  param.path=             path;
+  param.db=               db;
+  param.alias=            alias;
+  param.generate_warning= generate_warning;
+  param.error=            -1;                   // Table not found
+
+  thd->push_internal_handler(&no_such_table_handler);
+  if (plugin_foreach(thd, delete_table_force, MYSQL_STORAGE_ENGINE_PLUGIN,
+                     &param))
+    param.error= 0;                            // Delete succeded
+  thd->pop_internal_handler();
+  DBUG_RETURN(param.error);
 }
 
 
@@ -5599,43 +5749,6 @@ static my_bool discover_existence(THD *thd, plugin_ref plugin,
   return ht->discover_table_existence(ht, args->db, args->table_name);
 }
 
-class Table_exists_error_handler : public Internal_error_handler
-{
-public:
-  Table_exists_error_handler()
-    : m_handled_errors(0), m_unhandled_errors(0)
-  {}
-
-  bool handle_condition(THD *thd,
-                        uint sql_errno,
-                        const char* sqlstate,
-                        Sql_condition::enum_warning_level *level,
-                        const char* msg,
-                        Sql_condition ** cond_hdl)
-  {
-    *cond_hdl= NULL;
-    if (sql_errno == ER_NO_SUCH_TABLE ||
-        sql_errno == ER_NO_SUCH_TABLE_IN_ENGINE ||
-        sql_errno == ER_WRONG_OBJECT)
-    {
-      m_handled_errors++;
-      return TRUE;
-    }
-
-    if (*level == Sql_condition::WARN_LEVEL_ERROR)
-      m_unhandled_errors++;
-    return FALSE;
-  }
-
-  bool safely_trapped_errors()
-  {
-    return ((m_handled_errors > 0) && (m_unhandled_errors == 0));
-  }
-
-private:
-  int m_handled_errors;
-  int m_unhandled_errors;
-};
 
 /**
   Check if a given table exists, without doing a full discover, if possible
@@ -5714,8 +5827,10 @@ bool ha_table_exists(THD *thd, const LEX_CSTRING *db,
                                            MYSQL_STORAGE_ENGINE_PLUGIN);
         *hton= p ? plugin_hton(p) : NULL;
         if (*hton)
+        {
           // verify that the table really exists
           exists= discover_existence(thd, p, &args);
+        }
       }
       else
         *hton= view_pseudo_hton;
